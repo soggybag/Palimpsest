@@ -30,3 +30,14 @@
 *.exe
 *.out
 *.app
+
+# Build output
+build/
+*.bin
+*.elf
+*.hex
+*.map
+*.lst
+
+# macOS
+.DS_Store
