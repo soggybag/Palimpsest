@@ -40,10 +40,10 @@ same notes) — nothing here changes if you use that instead.
 
 | Note | Function | Type |
 |---|---|---|
-| 60 | Record   | impulse — each press advances EMPTY→REC→PLAY→EMPTY |
+| 60 | Record   | impulse — each press advances EMPTY→REC→PLAY→EMPTY (clock-quantised) |
 | 61 | Overdub  | latching |
-| 62 | Substitute | latching (latch = commit, hold = audition) |
-| 63 | Mute     | wired, no-op until M5 |
+| 62 | Substitute | latching (latch = commit, hold = audition; clock-quantised) |
+| 63 | Mute     | latching — loop output on/off, clock-quantised, phantom playhead |
 | 64 | Reverse  | latching |
 | 65 | Retrigger | impulse |
 | 66 | Undo     | impulse (toggles undo ⇄ redo) |
@@ -57,8 +57,10 @@ same notes) — nothing here changes if you use that instead.
 | CTRL_3 | Window length — full CW = window off; down = shrink (30 ms floor); CV sums |
 | CTRL_4 | Window start — position through the loop; CV sums |
 | encoder push | Record (tap advances; hold = record-while-held, close on release) |
-| GATE_IN_1 | Record gate — high→low span defines loop length |
+| **GATE_IN_1** | **CLOCK IN** — quantise reference (was Record gate; use encoder/note 60 now) |
 | GATE_IN_2 | Retrigger — edge = jump to window start; audio-rate = stutter |
+| gate out | **SYNC OUT** — ~5 ms pulse at each loop/window cycle start |
+| CV out 1 | **PHASE** — 0→~5 V ramp over the audible cycle (follows speed / reverse / window) |
 
 Speed / Feedback / Window have **no MIDI** — knob + CV only.
 
@@ -104,7 +106,6 @@ tap $REC ; tap $REC ; tap $REC    # back to EMPTY
 - [ ] `tap $REC` from EMPTY → `REC`; `tap $REC` → `PLAY` + a length; loop is audible
 - [ ] encoder tap does the same
 - [ ] `hold $REC 3` from EMPTY → records 3 s, closes on release (`PLAY 3.0xx s`)
-- [ ] GATE_IN_1 high→low → loop length matches the gate width
 - [ ] CTRL_1 mid → loop erodes each pass; lower = faster decay
 - [ ] CTRL_1 full CW → `FRZ`; loop holds indefinitely, no degradation over minutes
 - [ ] drone held through the close → loop wrap is clean (no click)
@@ -149,6 +150,32 @@ tap $REC ; tap $REC ; tap $REC    # back to EMPTY
 **Known M4-v1:** ~60–300 ms windows read a touch flat (read-side crossfade
 trade-off); a window straddling the recorded loop's origin (CTRL_4 near max +
 longish window) can tick at that internal seam.
+
+### M5 — Clock / quantise / SYNC / PHASE
+
+Patch a clock module (or an LFO square) into **GATE_IN_1**. The OLED shows
+`nnnBPM` + a beat flash when a clock is detected.
+
+- [ ] no clock patched → Record / Mute / Substitute act immediately (M4 behaviour)
+- [ ] clock present, `tap $REC` from EMPTY → `ARM`; recording starts on the next
+      pulse; `tap $REC` again → `ARM`; closes on a pulse → loop length is a whole
+      number of clock periods
+- [ ] `tap $MUTE` with clock → `ARM`, then `MUTE` on the next pulse; loop output
+      fades out (~2 ms, no click), input still passes
+- [ ] `tap $MUTE` again → loop returns on a pulse, **phase-locked** (it kept
+      running silently)
+- [ ] `tap $SUB` / `tap $SUB` with clock → substitute region snaps to pulse
+      boundaries
+- [ ] **SYNC OUT** (gate out): scope/LED shows one pulse per loop cycle; follows
+      Retrigger, window length, reverse
+- [ ] **PHASE** (CV out 1): rising ramp over each cycle; halves rate at 0.5×,
+      runs backward under Reverse, shortens to the window when windowed
+- [ ] pull the clock cable → after ~4 missed pulses `BPM` clears and behaviour
+      returns to immediate
+
+**Known M5-v1:** clock tracked at block resolution (~0.7 ms jitter); quantise is
+to the clock *pulse* (bar/subdivision needs the config menu at M7); `Record` no
+longer has a gate input on the prototype (encoder / note 60 only).
 
 ---
 

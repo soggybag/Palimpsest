@@ -6,6 +6,7 @@ CPP_SOURCES = Palimpsest.cpp
 
 # Header search paths for the src/ tree.
 C_INCLUDES += -I. -Isrc
+C_DEFS += -DPALIMPSEST_CV_OUT=0
 
 # Library locations (relative to daisy/Palimpsest/).
 LIBDAISY_DIR = ../../DaisyExamples/libDaisy

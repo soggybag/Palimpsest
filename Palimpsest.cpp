@@ -1,18 +1,19 @@
-// Palimpsest — M1b: unified control layer + MIDI in.
+// Palimpsest — M5: clock + quantise + SYNC/PHASE out.
 //
-// Every function now runs through Controls (tap = latch, hold = momentary, gate
-// = level), fed by MIDI notes (Pico RGB Keypad or any MIDI keyboard, notes
-// 36..42) and/or the panel. Colour state is echoed back over MIDI so the keypad
-// LEDs show the contract.
+// Functions run through Controls (tap = latch, hold = momentary, gate = level),
+// fed by MIDI notes 60..66 (USB "Daisy" or TRS MIDI) and the panel.
 //
-//   note 36 / encoder / GATE_IN_1   Record   (edge = advance EMPTY->REC->PLAY->EMPTY)
-//   note 37                         Overdub  (M3)
-//   note 38                         Substitute (M3)
-//   note 39                         Mute     (M5)
-//   note 40 / CTRL_3>0.5            Reverse
-//   note 41 / GATE_IN_2             Retrigger / stutter
-//   note 42                         Undo     (M3)
-//   CTRL_1  Feedback     CTRL_2  Speed (detented, CV sums)
+//   note 60 / encoder   Record     (advance EMPTY->REC->PLAY->EMPTY; quantised)
+//   note 61             Overdub
+//   note 62             Substitute  (latch = commit, hold = audition; quantised)
+//   note 63             Mute        (quantised; phantom playhead)
+//   note 64             Reverse
+//   note 65 / GATE_IN_2 Retrigger / stutter
+//   note 66             Undo
+//   CTRL_1 Feedback   CTRL_2 Speed   CTRL_3 Window len   CTRL_4 Window start
+//   GATE_IN_1 = CLOCK IN   gate out = SYNC OUT   CV out 1 = PHASE
+//
+// With no clock present, Record / Mute / Substitute act immediately (== M4).
 
 #include <cmath>
 #include <cstdio>
@@ -21,6 +22,8 @@
 #include "util/CpuLoadMeter.h"
 #include "src/LoopBuffer.h"
 #include "src/LoopReader.h"
+#include "src/Clock.h"
+#include "src/Snapshot.h"
 #include "src/Engine.h"
 #include "src/Controls.h"
 
@@ -31,6 +34,7 @@ DaisyPatch     hw;
 MidiUsbHandler midi_usb; // "Daisy" USB-MIDI device (share the flashing cable)
 LoopBuffer     loop;
 Snapshot       snap;
+Clock          clk;
 Engine         engine;
 Controls       controls;
 CpuLoadMeter   cpu;
@@ -40,10 +44,11 @@ constexpr size_t kPoolSamples = 8u * 1024u * 1024u; // 16 MB snapshot pool
 static int16_t DSY_SDRAM_BSS s_buf[kBufSamples];
 static int16_t DSY_SDRAM_BSS s_pool[kPoolSamples];
 
-static float   s_dt_ms                      = 0.f;
-static bool    s_enc_pressed                = false;
-static uint8_t s_col_sent[(int)Func::COUNT] = {0};
-static float   s_cpu_peak                   = 0.f; // peak load, last ~1 s window
+static float    s_dt_ms                      = 0.f;
+static bool     s_enc_pressed                = false;
+static uint8_t  s_col_sent[(int)Func::COUNT] = {0};
+static float    s_cpu_peak                   = 0.f; // peak load, last ~1 s window
+static uint32_t s_sync_left                  = 0;   // SYNC OUT pulse countdown
 
 static float FeedbackFromKnob()
 {
@@ -121,16 +126,16 @@ static void AudioCallback(AudioHandle::InputBuffer  in,
         controls[Func::RECORD].Release();
     s_enc_pressed = enc;
 
-    controls.SetGate(Func::RECORD,
-                     hw.gate_input[DaisyPatch::GATE_IN_1].State());
+    // GATE_IN_1 = CLOCK IN ; GATE_IN_2 = Retrigger
+    clk.Block(hw.gate_input[DaisyPatch::GATE_IN_1].State(), size);
     controls.SetGate(Func::RETRIGGER,
                      hw.gate_input[DaisyPatch::GATE_IN_2].State());
 
     controls.Tick(s_dt_ms);
+    if(clk.Tick())
+        engine.OnClockTick();
 
     // Controls -> Engine
-    // Record is impulse: each press/gate-rising advances the state machine;
-    // releasing a hold (or gate-falling) closes it.
     if(controls[Func::RECORD].Trigger())
         engine.TrigRecord();
     if(controls[Func::RECORD].ReleaseAfterHold()
@@ -146,11 +151,19 @@ static void AudioCallback(AudioHandle::InputBuffer  in,
     engine.Overdub(controls[Func::OVERDUB].Engaged());
     engine.Substitute(controls[Func::SUBSTITUTE].Engaged(),
                       controls[Func::SUBSTITUTE].Latched());
+    engine.Mute(controls[Func::MUTE].Engaged());
     if(controls[Func::UNDO].Trigger())
         engine.Undo();
 
     engine.SetWindow(hw.GetKnobValue(DaisyPatch::CTRL_4),  // start
                      hw.GetKnobValue(DaisyPatch::CTRL_3)); // length (max = off)
+
+    // A fresh canvas must not inherit a stuck latch.
+    static Engine::State s_prev_state = Engine::State::EMPTY;
+    Engine::State        st           = engine.GetState();
+    if(st == Engine::State::EMPTY && s_prev_state != Engine::State::EMPTY)
+        controls.ClearAllLatches();
+    s_prev_state = st;
 
     for(size_t n = 0; n < size; n++)
     {
@@ -158,6 +171,20 @@ static void AudioCallback(AudioHandle::InputBuffer  in,
         for(size_t ch = 0; ch < 4; ch++)
             out[ch][n] = sig;
     }
+
+#if PALIMPSEST_CV_OUT
+    // SYNC OUT: ~5 ms gate at each loop/window cycle start
+    if(engine.CycleStarted())
+        s_sync_left = 240;
+    dsy_gpio_write(&hw.gate_output, s_sync_left > 0 ? 1 : 0);
+    s_sync_left = (s_sync_left > size) ? s_sync_left - size : 0;
+
+    // PHASE CV OUT (CV out 1): 0..1 ramp over the audible cycle
+    hw.seed.dac.WriteValue(DacHandle::Channel::ONE,
+                           (uint16_t)(engine.CyclePhase() * 4095.f));
+#else
+    (void)s_sync_left;
+#endif
 
     SendColours();
     cpu.OnBlockEnd();
@@ -184,13 +211,25 @@ static void DrawUI()
     hw.display.WriteString(b, Font_7x10, true);
 
     // write / undo status, top-right
-    const char* w = engine.Substituting() ? "SUB"
+    const char* w = engine.Muted()         ? "MUTE"
+                    : engine.IsArmed()       ? "ARM"
+                    : engine.Substituting() ? "SUB"
                     : engine.Overdubbing() ? "ODB"
                     : engine.Undone()      ? "UND"
                     : engine.CanUndo()     ? "u"
                                            : "";
-    hw.display.SetCursor(110, 0);
+    hw.display.SetCursor(104, 0);
     hw.display.WriteString(w, Font_6x8, true);
+
+    // clock readout, line 2 left
+    if(engine.ClockOn())
+    {
+        snprintf(b, sizeof(b), "%dBPM", (int)(clk.Bpm() + 0.5f));
+        hw.display.SetCursor(0, 10);
+        hw.display.WriteString(b, Font_6x8, true);
+        if(clk.Phase() < 0.15f) // beat flash
+            hw.display.DrawRect(40, 10, 44, 14, true, true);
+    }
 
     const int x0 = 0, x1 = 127, y0 = 20, y1 = 38;
     hw.display.DrawRect(x0, y0, x1, y1, true);
@@ -279,7 +318,8 @@ int main(void)
     loop.Init(s_buf, kBufSamples);
     loop.ClearTo(kBufSamples);
     snap.Init(s_pool, kPoolSamples, kBufSamples);
-    engine.Init(&loop, &snap, sr);
+    clk.Init(sr);
+    engine.Init(&loop, &snap, &clk, sr);
     controls.Init();
     cpu.Init(sr, hw.AudioBlockSize());
 

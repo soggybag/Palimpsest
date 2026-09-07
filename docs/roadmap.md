@@ -15,8 +15,8 @@ Build vertically: `record -> play -> feedback` solid and *musical* before any ed
 - [x] **M1b** — control layer + MIDI in (impulse/latching split, USB+TRS MIDI)
 - [x] **M3** — snapshot layer: Overdub + Substitute + Undo
 - [x] **M4** — Loop Window scanning
-- [ ] **M5** — Clock: quantise, clocked Substitute, SYNC/PHASE out   ← current
-- [ ] M6 — Loop Select
+- [x] **M5** — Clock: quantise, clocked Substitute, SYNC/PHASE out
+- [ ] **M6** — Loop Select   ← current
 - [ ] M7 — Gesture recorder + probability + timeline polish
 
 ## Build & flash

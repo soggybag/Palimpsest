@@ -150,6 +150,14 @@ class Controls
 
     void SetGate(Func fn, bool g) { f_[(int)fn].SetGate(g); }
 
+    // Drop every latched state (call when the engine returns to EMPTY so a new
+    // take never inherits a stuck Overdub / Substitute / Mute / Reverse).
+    void ClearAllLatches()
+    {
+        for(int i = 0; i < (int)Func::COUNT; i++)
+            f_[i].ClearLatch();
+    }
+
     void Tick(float dt_ms)
     {
         for(int i = 0; i < (int)Func::COUNT; i++)

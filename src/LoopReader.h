@@ -24,12 +24,13 @@ class LoopReader
 
     void Init()
     {
-        lpos_   = 0.0;
-        speed_  = 1.0f;
-        dir_    = 1;
-        jleft_  = 0;
-        wstart_ = 0.0;
-        wlen_   = 1.0;
+        lpos_    = 0.0;
+        speed_   = 1.0f;
+        dir_     = 1;
+        jleft_   = 0;
+        wstart_  = 0.0;
+        wlen_    = 1.0;
+        wrapped_ = false;
     }
 
     void SetSpeed(float mag) { speed_ = mag < 0.f ? -mag : mag; }
@@ -47,6 +48,16 @@ class LoopReader
     size_t LastIntPos() const { return last_ipos_; }
     double WinStart() const { return wstart_; }
     double WinLen() const { return wlen_; }
+    float  LocalPhase() const
+    {
+        return wlen_ > 0.0 ? (float)(lpos_ / wlen_) : 0.f;
+    }
+    bool TakeWrapped() // true once per window-cycle boundary
+    {
+        bool w   = wrapped_;
+        wrapped_ = false;
+        return w;
+    }
 
     float GlobalPhase(size_t loopLen) const
     {
@@ -104,7 +115,10 @@ class LoopReader
         if(useHann)
             out *= 0.5f - 0.5f * cosf(6.2831853f * (float)(lpos_ / W));
 
-        lpos_ = Advance(lpos_, step, W, xf, useXfade);
+        double before = lpos_;
+        lpos_         = Advance(lpos_, step, W, xf, useXfade);
+        if((dir_ >= 0 && lpos_ < before) || (dir_ < 0 && lpos_ > before))
+            wrapped_ = true;
         return out;
     }
 
@@ -179,4 +193,5 @@ class LoopReader
     int    jdir_  = 1;
 
     size_t last_ipos_ = 0;
+    bool   wrapped_   = false;
 };
