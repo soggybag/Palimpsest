@@ -16,7 +16,9 @@ Build vertically: `record -> play -> feedback` solid and *musical* before any ed
 - [x] **M3** — snapshot layer: Overdub + Substitute + Undo
 - [x] **M4** — Loop Window scanning
 - [x] **M5** — Clock: quantise, clocked Substitute, SYNC/PHASE out
-- [ ] **M6** — Loop Select   ← current
+- [ ] **M5.1** — clock-aware Loop Window (musical snapping)   ← current
+- [ ] M5.2 — Crop & Tile
+- [ ] M6 — Loop Select
 - [ ] M7 — Gesture recorder + probability + timeline polish
 
 ## Build & flash
@@ -182,6 +184,29 @@ grains, no clicks. Ref: user story 5.  [MET]
 
 **Done when:** the loop locks to an external clock, drops out and re-enters in
 phase, and other modules can clock off SYNC/PHASE. Ref: user stories 2, 3.
+
+## M5.1 — clock-aware Loop Window  *(small follow-up)*   <- current
+
+- [ ] clock present: window **length** snaps to clock multiples (÷4 ÷2 ×1 ×2 ×4…),
+      **start** snaps to the subdivision grid — rhythmic chopping (story 4)
+- [ ] no clock: continuous length/start as now — granular scanning (story 5)
+- [ ] mode follows clock presence, no menu
+
+## M5.2 — Crop & Tile
+
+Redefine loop length by an explicit gesture (not real-time Multiply).
+
+- [ ] `loop_base_` offset in LoopBuffer/Engine — the loop lives at
+      `[base_, base_+len_)`; tiled loop built at a fresh offset (also the
+      groundwork for M6 slots)
+- [ ] `TILE` function: source = window slice if windowed, else whole loop
+- [ ] tap = crop loop to the slice (window resets off); repeat taps append
+      more copies (2x, 3x, ...); clock present + hold = one copy per pulse
+- [ ] ~5 ms equal-power junction crossfade baked at each tile boundary
+- [ ] copy done a few blocks per callback (no audio glitch)
+- [ ] one-level Undo: restore pre-tile buffer + length + window
+- [ ] spec update: length is immutable via *real-time* ops; Crop & Tile is the
+      deliberate exception
 
 ## M6 — Loop Select
 

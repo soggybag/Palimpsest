@@ -50,6 +50,8 @@ class Engine
         sub_arm_want_ = false;
         sub_req_prev_ = false;
         cycle_flag_   = false;
+        win_start_sm_ = win_start_dz_ = 0.f;
+        win_len_sm_ = win_len_dz_ = 1.f;
         reader_.Init();
     }
 
@@ -76,9 +78,21 @@ class Engine
         if(state_ != State::PLAYING
            || len_ < (size_t)(2 * LoopReader::kMinWin))
             return;
+        // Raw ADC has broadband jitter (amplified by the exponential length
+        // curve) AND low-frequency wander in the signal band. One-pole kills the
+        // former; a deadband holds the value steady against the latter until the
+        // knob/CV actually moves. Otherwise the read pointer wobbles every block
+        // -> hash + a flickering length readout.
+        win_start_sm_ += 0.08f * (startNorm - win_start_sm_);
+        win_len_sm_ += 0.08f * (lenNorm - win_len_sm_);
+        if(fabsf(win_start_sm_ - win_start_dz_) > kWinDeadband)
+            win_start_dz_ = win_start_sm_;
+        if(fabsf(win_len_sm_ - win_len_dz_) > kWinDeadband)
+            win_len_dz_ = win_len_sm_;
+
         // rescale so the pot's real 0..~0.98 travel covers the full range and
         // the top ~8% is a hard "window off" zone (pots don't reach 1.0)
-        float ln = (lenNorm - 0.02f) / 0.90f;
+        float ln = (win_len_dz_ - 0.02f) / 0.90f;
         if(ln >= 1.0f)
         {
             reader_.SetWindow(0.0, (double)len_); // truly off: start 0, full length
@@ -98,7 +112,7 @@ class Engine
         }
         // keep the window inside [0, len_) so it never straddles the recording's
         // origin (that internal seam has no crossfade -> clicks per cycle)
-        double wstart   = (double)startNorm * (double)len_;
+        double wstart   = (double)win_start_dz_ * (double)len_;
         double maxstart = (double)len_ - wlen;
         if(maxstart < 0.0)
             maxstart = 0.0;
@@ -298,11 +312,7 @@ class Engine
                     d = -kMuteRamp;
                 mute_gain_ += d;
 
-#if PALIMPSEST_NO_MUTE_GAIN
-                return in + sig;
-#else
                 return in + sig * mute_gain_;
-#endif
             }
         }
         return in;
@@ -352,6 +362,7 @@ class Engine
     static constexpr size_t kMinLen       = 480;
     static constexpr float  kFreezeThresh = 0.999f;
     static constexpr float  kMuteRamp     = 1.0f / 96.0f; // ~2 ms
+    static constexpr float  kWinDeadband  = 0.004f;       // ADC-noise hysteresis
 
     void CloseNow()
     {
@@ -410,6 +421,10 @@ class Engine
     bool  mute_arm_       = false;
     bool  mute_target_    = false;
     float mute_gain_      = 1.0f;
+    float win_start_sm_   = 0.f;
+    float win_len_sm_     = 1.f;
+    float win_start_dz_   = 0.f;
+    float win_len_dz_     = 1.f;
     bool  sub_arm_        = false;
     bool  sub_arm_want_   = false;
     bool  sub_req_prev_   = false;

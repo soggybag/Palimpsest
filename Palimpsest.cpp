@@ -172,7 +172,6 @@ static void AudioCallback(AudioHandle::InputBuffer  in,
             out[ch][n] = sig;
     }
 
-#if PALIMPSEST_CV_OUT
     // SYNC OUT: ~5 ms gate at each loop/window cycle start
     if(engine.CycleStarted())
         s_sync_left = 240;
@@ -182,9 +181,6 @@ static void AudioCallback(AudioHandle::InputBuffer  in,
     // PHASE CV OUT (CV out 1): 0..1 ramp over the audible cycle
     hw.seed.dac.WriteValue(DacHandle::Channel::ONE,
                            (uint16_t)(engine.CyclePhase() * 4095.f));
-#else
-    (void)s_sync_left;
-#endif
 
     SendColours();
     cpu.OnBlockEnd();

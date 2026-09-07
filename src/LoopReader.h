@@ -40,7 +40,7 @@ class LoopReader
         wstart_ = start;
         wlen_   = wlen < 1.0 ? 1.0 : wlen;
         if(lpos_ >= wlen_)
-            lpos_ = 0.0;
+            lpos_ = Wrapf(lpos_, wlen_); // wrap, don't jump to 0 on a twitch
     }
 
     float  Speed() const { return speed_; }

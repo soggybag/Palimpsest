@@ -156,21 +156,21 @@ longish window) can tick at that internal seam.
 Patch a clock module (or an LFO square) into **GATE_IN_1**. The OLED shows
 `nnnBPM` + a beat flash when a clock is detected.
 
-- [ ] no clock patched → Record / Mute / Substitute act immediately (M4 behaviour)
-- [ ] clock present, `tap $REC` from EMPTY → `ARM`; recording starts on the next
+- [x] no clock patched → Record / Mute / Substitute act immediately (M4 behaviour)
+- [x] clock present, `tap $REC` from EMPTY → `ARM`; recording starts on the next
       pulse; `tap $REC` again → `ARM`; closes on a pulse → loop length is a whole
       number of clock periods
-- [ ] `tap $MUTE` with clock → `ARM`, then `MUTE` on the next pulse; loop output
+- [x] `tap $MUTE` with clock → `ARM`, then `MUTE` on the next pulse; loop output
       fades out (~2 ms, no click), input still passes
-- [ ] `tap $MUTE` again → loop returns on a pulse, **phase-locked** (it kept
+- [x] `tap $MUTE` again → loop returns on a pulse, **phase-locked** (it kept
       running silently)
-- [ ] `tap $SUB` / `tap $SUB` with clock → substitute region snaps to pulse
+- [x] `tap $SUB` / `tap $SUB` with clock → substitute region snaps to pulse
       boundaries
-- [ ] **SYNC OUT** (gate out): scope/LED shows one pulse per loop cycle; follows
+- [x] **SYNC OUT** (gate out): scope/LED shows one pulse per loop cycle; follows
       Retrigger, window length, reverse
-- [ ] **PHASE** (CV out 1): rising ramp over each cycle; halves rate at 0.5×,
+- [x] **PHASE** (CV out 1): rising ramp over each cycle; halves rate at 0.5×,
       runs backward under Reverse, shortens to the window when windowed
-- [ ] pull the clock cable → after ~4 missed pulses `BPM` clears and behaviour
+- [x] pull the clock cable → after ~4 missed pulses `BPM` clears and behaviour
       returns to immediate
 
 **Known M5-v1:** clock tracked at block resolution (~0.7 ms jitter); quantise is
