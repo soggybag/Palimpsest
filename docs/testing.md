@@ -186,3 +186,4 @@ longer has a gate input on the prototype (encoder / note 60 only).
   colour id) the module sends when a latch changes.
 - To reflash: hold BOOT + tap RESET on the Seed, then `make program-dfu`. The
   `Error during download get_status` at the end is harmless (dfu-util leave-request quirk).
+
