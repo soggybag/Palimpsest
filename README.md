@@ -6,6 +6,8 @@ form. The loop is raw material to be re-edited in real time, not just layered
 up: every performance function is one gesture *and* a patch point. Built on
 Electro-Smith Daisy (STM32H750), currently prototyped on a Daisy Patch.
 
+This project was inspired by the looping guitar work of [Andre Lafosse](https://andrelafosse.bandcamp.com/album/pivot-to-video-six-string-mixtape-volume-2) who uses the Echoplex Digital Pro to amazing effect! 
+
 ## Status
 
 Core editing engine is built and hardware-verified: record/loop/feedback,
