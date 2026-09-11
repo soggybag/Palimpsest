@@ -173,6 +173,15 @@ Patch a clock module (or an LFO square) into **GATE_IN_1**. The OLED shows
 - [x] pull the clock cable → after ~4 missed pulses `BPM` clears and behaviour
       returns to immediate
 
+### M5.1 — clock-aware Loop Window
+
+- [ ] no clock: CTRL_3/CTRL_4 behave exactly as M4/M5 (continuous, `Wnnnms`)
+- [ ] clock patched, turn CTRL_3 through its range → OLED shows `W1/8 W1/4 W1/2
+      Wx1 Wx2 Wx4 Wx8` in steps (not a continuous ms readout)
+- [ ] turn CTRL_4 → window start jumps between clock-period boundaries
+- [ ] each step is click-free
+- [ ] pull the clock mid-window → falls back to continuous scan smoothly
+
 **Known M5-v1:** clock tracked at block resolution (~0.7 ms jitter); quantise is
 to the clock *pulse* (bar/subdivision needs the config menu at M7); `Record` no
 longer has a gate input on the prototype (encoder / note 60 only).

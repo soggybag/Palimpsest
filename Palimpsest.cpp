@@ -248,7 +248,10 @@ static void DrawUI()
             hw.display.DrawRect(x0, y0 - 3, x0 + (we - x1), y0 - 1, true, true);
         }
         char wb[16];
-        snprintf(wb, sizeof(wb), "W%dms", (int)(engine.WinMs() + 0.5f));
+        if(engine.WinRatioIdx() >= 0) // clock-locked: show the musical ratio
+            snprintf(wb, sizeof(wb), "W%s", engine.WinRatioLabel());
+        else
+            snprintf(wb, sizeof(wb), "W%dms", (int)(engine.WinMs() + 0.5f));
         hw.display.SetCursor(88, 10);
         hw.display.WriteString(wb, Font_6x8, true);
     }

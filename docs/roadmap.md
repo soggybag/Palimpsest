@@ -17,8 +17,8 @@ Build vertically: `record -> play -> feedback` solid and *musical* before any ed
 - [x] **M3** — snapshot layer: Overdub + Substitute + Undo
 - [x] **M4** — Loop Window scanning
 - [x] **M5** — Clock: quantise, clocked Substitute, SYNC/PHASE out
-- [ ] **M5.1** — clock-aware Loop Window (musical snapping)   ← current
-- [ ] M5.2 — Crop & Tile
+- [x] **M5.1** — clock-aware Loop Window (musical snapping)
+- [ ] **M5.2** — Crop & Tile   ← current
 - [ ] M6 — Loop Select
 - [ ] M7 — Gesture recorder + probability + timeline polish
 
@@ -186,12 +186,24 @@ grains, no clicks. Ref: user story 5.  [MET]
 **Done when:** the loop locks to an external clock, drops out and re-enters in
 phase, and other modules can clock off SYNC/PHASE. Ref: user stories 2, 3.
 
-## M5.1 — clock-aware Loop Window  *(small follow-up)*   <- current
+## M5.1 — clock-aware Loop Window  *(small follow-up)*
 
-- [ ] clock present: window **length** snaps to clock multiples (÷4 ÷2 ×1 ×2 ×4…),
-      **start** snaps to the subdivision grid — rhythmic chopping (story 4)
-- [ ] no clock: continuous length/start as now — granular scanning (story 5)
-- [ ] mode follows clock presence, no menu
+- [x] clock present: window **length** snaps to a ratio ladder (1/8 1/4 1/2 x1 x2
+      x4 x8 of the clock period), **start** snaps to the period grid —
+      rhythmic chopping (story 4) (built)
+- [x] no clock: continuous length/start as before — granular scanning (story 5)
+- [x] mode follows clock presence automatically, no menu (built)
+- [x] OLED shows the ratio (`Wx1`, `W1/4`, ...) instead of ms when clock-locked
+- [x] step hysteresis on both the length ratio and start-position index (a still
+      knob at a bin boundary no longer flickers between adjacent steps)
+- [x] ladder top grows with how many clock periods fit the recording (up to
+      x256), instead of a fixed x8 ceiling — a long loop can reach a window
+      that actually covers most of it
+
+**Verified on hardware:** all of the above, including the long-loop ladder-top
+fix. Known non-issue: displayed BPM can drift +-1 with an unstable clock
+source (e.g. a 1U utility clock) — real source jitter, not a bug; the window
+ladder only shifts by the same <1% and stays musically stable.
 
 ## M5.2 — Crop & Tile
 
