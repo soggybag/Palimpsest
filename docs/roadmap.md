@@ -2,7 +2,8 @@
 
 Design spec: [`../CLAUDE.md`](../CLAUDE.md). Acceptance workflows:
 [`user-stories.md`](user-stories.md). Bench procedures + MIDI commands:
-[`testing.md`](testing.md).
+[`testing.md`](testing.md). UI element reference + open questions:
+[`interface.md`](interface.md).
 
 Build vertically: `record -> play -> feedback` solid and *musical* before any edits.
 
