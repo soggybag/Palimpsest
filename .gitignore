@@ -1,3 +1,6 @@
+
+*.afdesign~lock~
+
 # Prerequisites
 *.d
 
