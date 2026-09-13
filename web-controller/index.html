@@ -1,0 +1,497 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Palimpsest — Web Controller</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --panel: #e8a3a3;
+    --panel-dark: #7c7c7c;
+    --metal: #c9c9c9;
+    --metal-dark: #9a9a9a;
+    --ink: #1a1a1a;
+    --red: #e63946;
+    --cyan: #2ec4d6;
+    --green: #34c759;
+    --off: #555;
+    --bg: #f4f2ee;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px 12px 60px;
+  }
+  h1 { font-size: 17px; margin: 0 0 4px; }
+  .sub { font-size: 12px; color: #666; margin: 0 0 16px; text-align: center; max-width: 640px; }
+
+  .toolbar {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: center;
+    margin-bottom: 18px;
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 10px;
+    padding: 10px 14px;
+  }
+  .toolbar button {
+    font: inherit;
+    font-size: 13px;
+    padding: 7px 14px;
+    border-radius: 7px;
+    border: 1px solid #999;
+    background: #fafafa;
+    cursor: pointer;
+  }
+  .toolbar button:active { background: #eee; }
+  .toolbar select { font-size: 13px; padding: 6px; border-radius: 6px; }
+  #status { font-size: 12px; color: #555; min-width: 200px; }
+  #status.ok { color: #1a7a33; }
+  #status.err { color: #b3261e; }
+
+  .module {
+    position: relative;
+    width: 620px;
+    max-width: 96vw;
+    background: var(--panel);
+    border: 2px solid #333;
+    border-radius: 4px;
+    padding: 22px 26px 26px;
+    box-shadow: 0 6px 20px rgba(0,0,0,.15);
+  }
+  .rail-mark {
+    position: absolute;
+    width: 40px; height: 14px;
+    background: var(--metal);
+    border: 1px solid #333;
+    border-radius: 6px;
+  }
+  .rail-mark.tl { top: 6px; left: 10px; }
+  .rail-mark.tr { top: 6px; right: 10px; }
+  .rail-mark.bl { bottom: 6px; left: 10px; }
+  .rail-mark.br { bottom: 6px; right: 10px; }
+  .hline { border-top: 2px solid #222; margin: 4px 0 18px; }
+  .hline.bottom { margin: 18px 0 4px; }
+
+  .row { display: flex; align-items: flex-start; }
+  .row.top { justify-content: space-between; margin-bottom: 20px; }
+  .io-group { display: flex; gap: 18px; }
+  .io-group.out-box {
+    background: var(--panel-dark);
+    padding: 10px 14px;
+    border-radius: 4px;
+    margin-right: -6px;
+  }
+  .io { display: flex; flex-direction: column; align-items: center; width: 54px; }
+  .io .label { font-size: 12px; margin-bottom: 6px; color: #222; }
+  .out-box .label { color: #fff; }
+
+  .jack {
+    width: 34px; height: 34px; border-radius: 50%;
+    background: radial-gradient(circle at 35% 35%, #666, #1a1a1a 70%);
+    border: 2px solid #b33;
+    position: relative;
+  }
+  .jack::after {
+    content: "";
+    position: absolute; left: 50%; top: 50%;
+    width: 12px; height: 12px; border-radius: 50%;
+    background: #000;
+    transform: translate(-50%, -50%);
+  }
+  .jack.small { width: 26px; height: 26px; }
+
+  .oled-encoder-row { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 22px; gap: 20px; }
+
+  .oled {
+    width: 280px; height: 108px;
+    background: #0a0a0a;
+    border: 3px solid #222;
+    border-radius: 3px;
+    padding: 6px 8px;
+    color: #e8e8e8;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12px;
+    display: flex; flex-direction: column; gap: 3px;
+  }
+  .oled-top { display: flex; justify-content: space-between; }
+  .oled-bar { height: 8px; background: #222; border: 1px solid #444; }
+  .oled-bar-fill { height: 100%; background: #ddd; }
+  .oled-window { height: 16px; background: #000; border: 1px solid #666; position: relative; }
+  .oled-window-mark { position: absolute; top: 0; bottom: 0; left: 30%; width: 24%; background: #fff; }
+  .oled-caption { margin-top: auto; font-size: 9px; color: #888; text-align: right; }
+
+  .encoder-group { display: flex; flex-direction: column; align-items: center; }
+  .encoder-group .label { font-size: 13px; margin-bottom: 8px; }
+  .encoder-group .hint { font-size: 10px; color: #444; margin-top: 6px; text-align: center; max-width: 90px; }
+
+  .knob {
+    width: 64px; height: 64px; border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, #f0f0f0, var(--metal) 55%, var(--metal-dark) 100%);
+    border: 2px solid #222;
+    position: relative;
+    cursor: ns-resize;
+    touch-action: none;
+    user-select: none;
+  }
+  .knob-indicator {
+    position: absolute;
+    left: 50%; top: 50%;
+    width: 2px; height: 26px;
+    background: #222;
+    transform-origin: 50% 0%;
+    transform: translate(-50%, 0) rotate(0deg);
+  }
+  .knob.small { width: 56px; height: 56px; }
+
+  .col { display: flex; flex-direction: column; align-items: center; gap: 10px; flex: 1; }
+  .col .label { font-size: 12px; text-align: center; min-height: 14px; }
+
+  .row.knobs { justify-content: space-between; margin-bottom: 6px; }
+  .row.jacks { justify-content: space-between; margin-bottom: 6px; }
+  .row.buttons { justify-content: space-between; margin-bottom: 4px; }
+
+  .btn {
+    width: 54px; height: 54px; border-radius: 50%;
+    background: var(--off);
+    border: 2px solid #222;
+    cursor: pointer;
+    touch-action: none;
+    user-select: none;
+    transition: background .05s;
+  }
+  .btn.lit-red { background: var(--red); }
+  .btn.lit-cyan { background: var(--cyan); }
+  .btn.lit-green { background: var(--green); }
+
+  .legend {
+    width: 620px; max-width: 96vw;
+    margin-top: 16px;
+    font-size: 11.5px;
+    color: #555;
+    line-height: 1.5;
+  }
+  .legend b { color: #222; }
+  .swatch { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
+
+  .log {
+    width: 620px; max-width: 96vw;
+    margin-top: 14px;
+    background: #111;
+    color: #9f9;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 11px;
+    height: 110px;
+    overflow-y: auto;
+    padding: 8px 10px;
+    border-radius: 6px;
+  }
+  .log div { white-space: pre; }
+</style>
+</head>
+<body>
+
+<h1>Palimpsest — Web Controller</h1>
+<p class="sub">
+  Sends real MIDI to the Daisy over USB, using the same notes/CCs as
+  <code>docs/testing.md</code>. Requires Chrome or Edge (Web MIDI) — Safari and
+  Firefox don't support it. Not a live view of the hardware: knob positions
+  and button lights are this page's own local state, not read back from the
+  module.
+</p>
+
+<div class="toolbar">
+  <button id="connectBtn">Connect MIDI</button>
+  <select id="midiOut" disabled><option>no MIDI outputs</option></select>
+  <span id="status">not connected</span>
+</div>
+
+<div class="module">
+  <div class="rail-mark tl"></div><div class="rail-mark tr"></div>
+  <div class="rail-mark bl"></div><div class="rail-mark br"></div>
+  <div class="hline"></div>
+
+  <div class="row top">
+    <div class="io-group">
+      <div class="io"><div class="label">Audio</div><div class="jack"></div></div>
+      <div class="io"><div class="label">Clock</div><div class="jack"></div></div>
+    </div>
+    <div class="io-group out-box">
+      <div class="io"><div class="label">Dry</div><div class="jack"></div></div>
+      <div class="io"><div class="label">Phase</div><div class="jack"></div></div>
+      <div class="io"><div class="label">Out</div><div class="jack"></div></div>
+    </div>
+  </div>
+
+  <div class="oled-encoder-row">
+    <div class="oled">
+      <div class="oled-top"><span>REC&nbsp;&nbsp;3.05s</span><span>UNDO</span></div>
+      <div>120BPM</div>
+      <div class="oled-bar"><div class="oled-bar-fill" style="width:58%"></div></div>
+      <div class="oled-window"><div class="oled-window-mark"></div></div>
+      <div>x1.0</div>
+      <div class="oled-caption">illustrative — not live</div>
+    </div>
+    <div class="encoder-group">
+      <div class="label">Encoder</div>
+      <div class="knob" id="encoder"><div class="knob-indicator"></div></div>
+      <div class="hint">Loop Select — M6, not built yet</div>
+    </div>
+  </div>
+
+  <div class="row knobs" id="knobRow"></div>
+  <div class="row jacks" id="knobJackRow"></div>
+
+  <div class="row jacks" id="fnJackRow" style="margin-top:22px;"></div>
+  <div class="row buttons" id="fnBtnRow"></div>
+
+  <div class="hline bottom"></div>
+  <div class="rail-mark bl" style="position:relative; display:inline-block;"></div>
+</div>
+
+<div class="legend">
+  <div><span class="swatch" style="background:var(--red)"></span><b>red</b> = destructive (writes the loop) &nbsp;
+       <span class="swatch" style="background:var(--cyan)"></span><b>cyan</b> = playback only &nbsp;
+       <span class="swatch" style="background:var(--green)"></span><b>green</b> = undo</div>
+  <div style="margin-top:6px;">Notes 60–67 = Rec/Dub/Sub/Mute/Rev/R.Trig/Undo/Copy (impulse: Rec, R.Trig, Undo, Copy — latching: Dub, Sub, Mute, Rev).</div>
+  <div>CC 20–23 = Feedback/Speed/Size/Start (added to firmware for this page). <b>Mix (CC 24) is not wired in firmware yet</b> — turning it sends CC24 but nothing listens for it.</div>
+</div>
+
+<div class="log" id="log"></div>
+
+<script>
+const NOTE = { REC:60, DUB:61, SUB:62, MUTE:63, REV:64, RTRIG:65, UNDO:66, COPY:67 };
+const CC   = { FEEDBACK:20, SPEED:21, SIZE:22, START:23, MIX:24 };
+
+const FUNCS = [
+  { key:'REC',   label:'Rec',    note:NOTE.REC,   latching:false, colour:'red'   },
+  { key:'DUB',   label:'Dub',    note:NOTE.DUB,   latching:true,  colour:'red'   },
+  { key:'SUB',   label:'Sub',    note:NOTE.SUB,   latching:true,  colour:'red'   },
+  { key:'MUTE',  label:'Mute',   note:NOTE.MUTE,  latching:true,  colour:'cyan'  },
+  { key:'REV',   label:'Rev',    note:NOTE.REV,   latching:true,  colour:'cyan'  },
+  { key:'RTRIG', label:'R.Trig', note:NOTE.RTRIG, latching:false, colour:'cyan'  },
+  { key:'UNDO',  label:'Undo',   note:NOTE.UNDO,  latching:false, colour:'green' },
+  { key:'COPY',  label:'Copy',   note:NOTE.COPY,  latching:false, colour:'red'   },
+];
+
+const KNOBS = [
+  { key:'FEEDBACK', label:'Feedback', cc:CC.FEEDBACK, start:0.9 },
+  { key:'SPEED',    label:'Speed',    cc:CC.SPEED,    start:0.5 },
+  { key:'SIZE',     label:'Size',     cc:CC.SIZE,     start:1.0 },
+  { key:'START',    label:'Start',    cc:CC.START,    start:0.0 },
+  { key:'MIX',      label:'Mix',      cc:CC.MIX,      start:1.0, unwired:true },
+];
+
+let midiOut = null;
+const TAP_MS = 300;
+
+function setStatus(text, cls) {
+  const el = document.getElementById('status');
+  el.textContent = text;
+  el.className = cls || '';
+}
+
+function log(msg) {
+  const el = document.getElementById('log');
+  const line = document.createElement('div');
+  const t = new Date().toLocaleTimeString();
+  line.textContent = `[${t}] ${msg}`;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+  while (el.childNodes.length > 200) el.removeChild(el.firstChild);
+}
+
+function sendNote(note, on) {
+  if (!midiOut) { log(`(not connected) note ${note} ${on ? 'on' : 'off'}`); return; }
+  midiOut.send([on ? 0x90 : 0x80, note & 0x7f, on ? 100 : 0]);
+  log(`note ${note} ${on ? 'on ' : 'off'}`);
+}
+
+function sendCC(cc, value127) {
+  if (!midiOut) { log(`(not connected) CC${cc} = ${value127}`); return; }
+  midiOut.send([0xB0, cc & 0x7f, value127 & 0x7f]);
+  log(`CC${cc} = ${value127}`);
+}
+
+async function connectMIDI() {
+  if (!navigator.requestMIDIAccess) {
+    setStatus('Web MIDI not supported — use Chrome or Edge', 'err');
+    return;
+  }
+  try {
+    const access = await navigator.requestMIDIAccess({ sysex: false });
+    fillOutputs(access);
+    access.onstatechange = () => fillOutputs(access);
+  } catch (err) {
+    setStatus('MIDI access denied: ' + err, 'err');
+  }
+}
+
+function fillOutputs(access) {
+  const select = document.getElementById('midiOut');
+  const outputs = Array.from(access.outputs.values());
+  select.innerHTML = '';
+  select.disabled = outputs.length === 0;
+  if (outputs.length === 0) {
+    setStatus('No MIDI outputs — is the Daisy plugged in?', 'err');
+    midiOut = null;
+    return;
+  }
+  outputs.forEach(o => {
+    const opt = document.createElement('option');
+    opt.value = o.id;
+    opt.textContent = o.name;
+    select.appendChild(opt);
+  });
+  const preferred = outputs.find(o => /daisy/i.test(o.name)) || outputs[0];
+  select.value = preferred.id;
+  midiOut = preferred;
+  setStatus('connected: ' + preferred.name, 'ok');
+  select.onchange = () => {
+    midiOut = outputs.find(o => o.id === select.value) || null;
+    setStatus(midiOut ? 'connected: ' + midiOut.name : 'not connected',
+              midiOut ? 'ok' : 'err');
+  };
+}
+
+document.getElementById('connectBtn').addEventListener('click', connectMIDI);
+
+// ---- knobs ---------------------------------------------------------------
+function buildKnob(spec) {
+  const col = document.createElement('div');
+  col.className = 'col';
+  const label = document.createElement('div');
+  label.className = 'label';
+  label.textContent = spec.label + (spec.unwired ? ' *' : '');
+  const knob = document.createElement('div');
+  knob.className = 'knob';
+  const ind = document.createElement('div');
+  ind.className = 'knob-indicator';
+  knob.appendChild(ind);
+  col.appendChild(label);
+  col.appendChild(knob);
+
+  let value = spec.start;
+  function render() {
+    const deg = -135 + value * 270;
+    ind.style.transform = `translate(-50%,0) rotate(${deg}deg)`;
+  }
+  render();
+
+  knob.addEventListener('pointerdown', e => {
+    knob.setPointerCapture(e.pointerId);
+    const startY = e.clientY, startVal = value;
+    function move(ev) {
+      const dy = startY - ev.clientY;
+      value = Math.min(1, Math.max(0, startVal + dy / 180));
+      render();
+      sendCC(spec.cc, Math.round(value * 127));
+    }
+    function up() {
+      knob.removeEventListener('pointermove', move);
+      knob.removeEventListener('pointerup', up);
+    }
+    knob.addEventListener('pointermove', move);
+    knob.addEventListener('pointerup', up, { once: true });
+  });
+
+  return col;
+}
+
+const knobRow = document.getElementById('knobRow');
+const knobJackRow = document.getElementById('knobJackRow');
+KNOBS.forEach(spec => {
+  knobRow.appendChild(buildKnob(spec));
+  const jcol = document.createElement('div');
+  jcol.className = 'col';
+  const jack = document.createElement('div');
+  jack.className = 'jack small';
+  jcol.appendChild(jack);
+  knobJackRow.appendChild(jcol);
+});
+
+// decorative encoder (not wired -- Loop Select is M6)
+(function () {
+  const enc = document.getElementById('encoder');
+  const ind = enc.querySelector('.knob-indicator');
+  let value = 0.5;
+  function render() { ind.style.transform = `translate(-50%,0) rotate(${-135 + value * 270}deg)`; }
+  render();
+  enc.addEventListener('pointerdown', e => {
+    enc.setPointerCapture(e.pointerId);
+    const startY = e.clientY, startVal = value;
+    function move(ev) {
+      value = Math.min(1, Math.max(0, startVal + (startY - ev.clientY) / 180));
+      render();
+    }
+    function up() {
+      enc.removeEventListener('pointermove', move);
+      enc.removeEventListener('pointerup', up);
+    }
+    enc.addEventListener('pointermove', move);
+    enc.addEventListener('pointerup', up, { once: true });
+  });
+})();
+
+// ---- buttons --------------------------------------------------------------
+const fnJackRow = document.getElementById('fnJackRow');
+const fnBtnRow = document.getElementById('fnBtnRow');
+
+FUNCS.forEach(spec => {
+  const jcol = document.createElement('div');
+  jcol.className = 'col';
+  const jack = document.createElement('div');
+  jack.className = 'jack small';
+  jcol.appendChild(jack);
+  fnJackRow.appendChild(jcol);
+
+  const col = document.createElement('div');
+  col.className = 'col';
+  const label = document.createElement('div');
+  label.className = 'label';
+  label.textContent = spec.label;
+  const btn = document.createElement('div');
+  btn.className = 'btn';
+  col.appendChild(label);
+  col.appendChild(btn);
+  fnBtnRow.appendChild(col);
+
+  let latched = false;
+  let pressStart = 0;
+
+  function applyLit(on) {
+    btn.classList.remove('lit-red', 'lit-cyan', 'lit-green');
+    if (on) btn.classList.add('lit-' + spec.colour);
+  }
+
+  btn.addEventListener('pointerdown', e => {
+    btn.setPointerCapture(e.pointerId);
+    pressStart = Date.now();
+    sendNote(spec.note, true);
+    applyLit(true);
+  });
+  btn.addEventListener('pointerup', () => {
+    sendNote(spec.note, false);
+    if (spec.latching) {
+      const wasTap = Date.now() - pressStart < TAP_MS;
+      if (wasTap) latched = !latched;
+      applyLit(latched); // a hold leaves `latched` (and the light) unchanged
+    } else {
+      applyLit(false); // impulse: brief flash only
+    }
+  });
+});
+
+log('ready. Click "Connect MIDI" to grant this page access, then pick the Daisy.');
+</script>
+</body>
+</html>

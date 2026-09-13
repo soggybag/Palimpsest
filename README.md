@@ -29,6 +29,8 @@ milestone-by-milestone status and what's still ahead.
   commands for driving the module from a computer
 - [`pico_rig/README.md`](pico_rig/README.md) — Pico RGB Keypad bench control
   surface
+- [`web-controller/README.md`](web-controller/README.md) — clickable panel
+  mockup that drives the hardware over Web MIDI (Chrome/Edge)
 
 ## Build & flash
 

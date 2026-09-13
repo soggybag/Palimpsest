@@ -26,7 +26,7 @@ hold() { sendmidi dev "$D" on $1 100; sleep ${2:-1}; sendmidi dev "$D" off $1 0;
 on()   { sendmidi dev "$D" on $1 100; }                 # note on, leave held
 off()  { sendmidi dev "$D" off $1 0; }
 
-REC=60 ODB=61 SUB=62 MUTE=63 REV=64 RET=65 UNDO=66
+REC=60 ODB=61 SUB=62 MUTE=63 REV=64 RET=65 UNDO=66 TILE=67
 ```
 
 The **TRS MIDI IN** jack works in parallel (Pico keypad or a hardware keyboard,
@@ -46,7 +46,8 @@ same notes) — nothing here changes if you use that instead.
 | 63 | Mute     | latching — loop output on/off, clock-quantised, phantom playhead |
 | 64 | Reverse  | latching |
 | 65 | Retrigger | impulse |
-| 66 | Undo     | impulse (toggles undo ⇄ redo) |
+| 66 | Undo     | impulse (toggles undo ⇄ redo; also reverts/redoes Tile) |
+| 67 | Tile     | impulse — crop to the window slice (or whole loop), each further tap appends a copy |
 
 ### Panel
 
@@ -101,90 +102,125 @@ tap $REC ; tap $REC ; tap $REC    # back to EMPTY
 
 ## 4. Feature checklist
 
+Each block is meant to be pasted straight into the shell, top to bottom.
+Comment-only lines (no command) are a panel/patch-cable action — do that, then
+read the comment for what should happen.
+
 ### M1a — Record / Play / Feedback
 
-- [ ] `tap $REC` from EMPTY → `REC`; `tap $REC` → `PLAY` + a length; loop is audible
-- [ ] encoder tap does the same
-- [ ] `hold $REC 3` from EMPTY → records 3 s, closes on release (`PLAY 3.0xx s`)
-- [ ] CTRL_1 mid → loop erodes each pass; lower = faster decay
-- [ ] CTRL_1 full CW → `FRZ`; loop holds indefinitely, no degradation over minutes
-- [ ] drone held through the close → loop wrap is clean (no click)
+```bash
+tap $REC ; sleep 4 ; tap $REC     # EMPTY -> REC -> PLAY, ~4 s loop, audible
+# encoder tap does the same, no MIDI needed
+hold $REC 3                       # EMPTY: hold 3 s -> PLAY 3.0xx s on release
+# CTRL_1 at noon                  # loop erodes each pass; lower = faster decay
+# CTRL_1 full CW                 # 'FRZ' -> holds indefinitely, no degradation
+# hold a drone through the close # wrap is clean, no click
+```
 
 ### M2 — Reverse / Speed / Retrigger
 
-- [ ] `tap $REV` → `V` + `<REV`, playback backward; `tap $REV` → forward, clean flip
-- [ ] `hold $REV 1` → reverses only during the hold
-- [ ] CTRL_2 sweep → smooth pitch glide; detents catch at ½ / 1 / 2×
-- [ ] CV into CTRL_2 jack → shifts speed
-- [ ] `tap $RET` → playhead jumps to loop start, no click
-- [ ] audio-rate gate (~20–50 Hz) into GATE_IN_2 → stutter
+```bash
+tap $REV                         # 'V' + '<REV', plays backward
+tap $REV                         # forward again -- clean flip both ways
+hold $REV 1                      # reverses only during the hold
+# CTRL_2 sweep                   # smooth pitch glide, detents at 1/2 1x 2x
+# CV into CTRL_2 jack            # shifts speed
+tap $RET                         # playhead jumps to loop start, no click
+# audio-rate gate (~20-50 Hz) -> GATE_IN_2   # stutter
+```
 
 ### M1b — Control layer
 
-- [ ] `tap $REC` vs `hold $REC 2` behave differently (latched vs momentary)
-- [ ] `tap $RET` five times in a row → fires every time (not every other)
-- [ ] USB and TRS MIDI both drive the same functions
-- [ ] engaged-function letters on the OLED track the latches
-- [ ] *(keypad wired)* key LEDs follow state via the colour echo
+```bash
+tap $REC                                              # tap = latch, keeps recording
+hold $REC 2                                           # hold = momentary, records only while held
+tap $RET ; tap $RET ; tap $RET ; tap $RET ; tap $RET  # fires every time, not every other
+# USB and TRS MIDI both drive the same functions
+# OLED engaged-function row tracks the latches
+# (keypad wired) key LEDs follow state via the colour echo
+```
 
 ### M3 — Overdub / Substitute / Undo
 
-- [ ] `tap $ODB ; sleep 4 ; tap $ODB` → layer added, `u` shows; `tap $UNDO` removes it; `tap $UNDO` restores it
-- [ ] `tap $REV ; tap $ODB ; sleep 4 ; tap $ODB ; tap $REV` → new material plays backward on the forward pass
-- [ ] overdub with CTRL_2 off 1× → material lands at the moved position (artefact expected)
-- [ ] `hold $SUB 2` → region replaced live while held, **snaps back** on release
-- [ ] `tap $SUB ; sleep 4 ; tap $SUB` → change **sticks**, `u` shows; `tap $UNDO` reverts it
-- [ ] commit an overdub, then `hold $SUB 2` (audition + revert), then `tap $UNDO` → still undoes the **overdub** (not a no-op)
-- [ ] `tap $ODB ; sleep 200 ; tap $ODB` → no crash; oldest regions just stop being undoable
+```bash
+tap $ODB ; sleep 4 ; tap $ODB    # layer added, 'u' shows
+tap $UNDO                        # layer removed
+tap $UNDO                        # layer restored
+tap $REV ; tap $ODB ; sleep 4 ; tap $ODB ; tap $REV   # new material plays backward on the forward pass
+# CTRL_2 off 1x, then overdub    # material lands at the moved position (artefact expected)
+hold $SUB 2                      # region replaced live while held, snaps back on release
+tap $SUB ; sleep 4 ; tap $SUB    # change sticks, 'u' shows
+tap $UNDO                        # reverts the substitute
+tap $ODB ; sleep 2 ; tap $ODB    # commit an overdub
+hold $SUB 2                      # audition + revert a substitute
+tap $UNDO                        # still undoes the OVERDUB, not a no-op
+tap $ODB ; sleep 200 ; tap $ODB  # long overdub: no crash; oldest regions stop being undoable
+```
 
 ### M4 — Loop Window
 
-- [ ] CTRL_3 down from full CW → `Wnnnms` + bracket bar; playback confines to the window, clean at the window wrap
-- [ ] CTRL_4 sweep → window slides through the loop; playhead still sweeps the whole timeline
-- [ ] LFO into CTRL_4 jack → tape-scrub / granular scan of your recording
-- [ ] CTRL_3 to minimum (~30 ms) → chattering grain loop, no clicks (per-grain Hann below 60 ms)
-- [ ] `tap $REV` / `tap $RET` while windowed → operate relative to the window
-- [ ] CTRL_3 full CW → identical to M3 (window off)
-- [ ] `tap $ODB` / `hold $SUB` while windowed → write inside the window
+```bash
+# CTRL_3 down from full CW       # 'Wnnnms' + bracket appears; playback confines to the window, clean wrap
+# CTRL_4 sweep                   # window slides through the loop; playhead sweeps the whole timeline
+# LFO -> CTRL_4 jack             # tape-scrub / granular scan of your recording
+# CTRL_3 to minimum (~30 ms)     # chattering grain loop, no clicks (per-grain Hann below 60 ms)
+tap $REV                         # reverse operates relative to the window
+tap $RET                         # retrigger jumps to window start
+# CTRL_3 full CW                # identical to M3 (window off)
+tap $ODB                         # writes inside the window
+hold $SUB 2                      # same, for substitute
 
-**Known M4-v1:** ~60–300 ms windows read a touch flat (read-side crossfade
-trade-off); a window straddling the recorded loop's origin (CTRL_4 near max +
-longish window) can tick at that internal seam.
+# known M4-v1: ~60-300 ms windows read a touch flat (read-side crossfade
+# trade-off); a window straddling the recorded loop's origin (CTRL_4 near
+# max + longish window) can tick at that internal seam
+```
 
 ### M5 — Clock / quantise / SYNC / PHASE
 
-Patch a clock module (or an LFO square) into **GATE_IN_1**. The OLED shows
-`nnnBPM` + a beat flash when a clock is detected.
-
-- [x] no clock patched → Record / Mute / Substitute act immediately (M4 behaviour)
-- [x] clock present, `tap $REC` from EMPTY → `ARM`; recording starts on the next
-      pulse; `tap $REC` again → `ARM`; closes on a pulse → loop length is a whole
-      number of clock periods
-- [x] `tap $MUTE` with clock → `ARM`, then `MUTE` on the next pulse; loop output
-      fades out (~2 ms, no click), input still passes
-- [x] `tap $MUTE` again → loop returns on a pulse, **phase-locked** (it kept
-      running silently)
-- [x] `tap $SUB` / `tap $SUB` with clock → substitute region snaps to pulse
-      boundaries
-- [x] **SYNC OUT** (gate out): scope/LED shows one pulse per loop cycle; follows
-      Retrigger, window length, reverse
-- [x] **PHASE** (CV out 1): rising ramp over each cycle; halves rate at 0.5×,
-      runs backward under Reverse, shortens to the window when windowed
-- [x] pull the clock cable → after ~4 missed pulses `BPM` clears and behaviour
-      returns to immediate
+```bash
+# patch a clock module (or an LFO square) into GATE_IN_1
+# OLED shows nnnBPM + a beat flash once it locks
+tap $REC                         # ARM; recording starts on the next pulse
+tap $REC                         # ARM; closes on a pulse -> length is a whole number of periods
+tap $MUTE                        # ARM, then MUTE on the next pulse; ~2 ms fade, input still passes
+tap $MUTE                        # returns on a pulse, phase-locked (kept running silently)
+tap $SUB ; tap $SUB              # substitute snaps to pulse boundaries
+# gate out = SYNC                # one pulse per loop cycle
+# CV out 1 = PHASE                # rising ramp per cycle; halves at 0.5x; backward under reverse; shortens when windowed
+# pull the clock cable           # BPM clears after ~4 missed pulses, behaviour goes back to immediate
+```
 
 ### M5.1 — clock-aware Loop Window
 
-- [ ] no clock: CTRL_3/CTRL_4 behave exactly as M4/M5 (continuous, `Wnnnms`)
-- [ ] clock patched, turn CTRL_3 through its range → OLED shows `W1/8 W1/4 W1/2
-      Wx1 Wx2 Wx4 Wx8` in steps (not a continuous ms readout)
-- [ ] turn CTRL_4 → window start jumps between clock-period boundaries
-- [ ] each step is click-free
-- [ ] pull the clock mid-window → falls back to continuous scan smoothly
+```bash
+# no clock: CTRL_3/CTRL_4 continuous, 'Wnnnms' -- same as M4
+# clock patched, turn CTRL_3     # steps through W1/8 W1/4 W1/2 Wx1 Wx2 Wx4 Wx8 ...
+# turn CTRL_4                    # window start jumps between clock-period boundaries
+# pull the clock mid-window      # falls back to continuous scan, smoothly
+```
 
-**Known M5-v1:** clock tracked at block resolution (~0.7 ms jitter); quantise is
-to the clock *pulse* (bar/subdivision needs the config menu at M7); `Record` no
-longer has a gate input on the prototype (encoder / note 60 only).
+### M5.2 — Crop & Tile
+
+```bash
+tap $REC ; sleep 4 ; tap $REC    # a 4 s loop to work with
+# CTRL_3/4 down to a short musical slice
+tap $TILE                        # crops to the slice; length drops; window off
+tap $TILE                        # length doubles (2 copies), click-free join
+tap $TILE                        # triples
+tap $UNDO                        # reverts the last tile step
+tap $UNDO                        # redoes it
+tap $ODB ; sleep 2 ; tap $ODB
+tap $UNDO                        # reverts the overdub
+tap $TILE
+tap $UNDO                        # now reverts the TILE, not the overdub
+# tap $TILE repeatedly past ~30 s total   # 'FULL' flashes, no crash, stays at last good length
+# dial a NEW window (e.g. covering two existing repeats)
+hold $TILE 1                     # redefines the unit from the new window, count resets to 1
+
+# known M5-v1: clock tracked at block resolution (~0.7 ms jitter); quantise
+# is to the clock pulse (bar/subdivision needs the config menu at M7);
+# Record has no gate input on the prototype (encoder / note 60 only)
+```
 
 ---
 

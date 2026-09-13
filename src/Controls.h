@@ -28,6 +28,7 @@ enum class Func : uint8_t
     REVERSE,
     RETRIGGER,
     UNDO,
+    TILE,
     COUNT,
 };
 
@@ -41,6 +42,7 @@ static constexpr uint8_t kFuncNote[(int)Func::COUNT] = {
     64, // REVERSE
     65, // RETRIGGER
     66, // UNDO
+    67, // TILE
 };
 
 class FuncControl
@@ -59,8 +61,12 @@ class FuncControl
     {
         if(pressed_)
         {
-            if(held_ms_ < kTapMs && latching_)
-                latch_ = !latch_; // tap -> toggle (latching funcs only)
+            if(held_ms_ < kTapMs)
+            {
+                tap_released_pending_ = true; // a short tap, whatever the func does with it
+                if(latching_)
+                    latch_ = !latch_; // tap -> toggle (latching funcs only)
+            }
             if(held_ms_ >= kTapMs)
                 relhold_pending_ = true; // release of a hold
         }
@@ -109,6 +115,15 @@ class FuncControl
         relhold_pending_ = false;
         return t;
     }
+    // One-shot: fires when a press under kTapMs releases (a tap, as opposed to
+    // a hold). Usable on any control, latching or impulse, independent of
+    // Trigger()/ReleaseAfterHold() -- e.g. Tile uses tap = append, hold = redefine.
+    bool TapReleased()
+    {
+        bool t                = tap_released_pending_;
+        tap_released_pending_ = false;
+        return t;
+    }
 
   private:
     static constexpr float kTapMs = 300.f;
@@ -121,8 +136,9 @@ class FuncControl
     bool  momentary_       = false;
     bool  rising_          = false;
     bool  falling_         = false;
-    bool  trig_pending_    = false;
-    bool  relhold_pending_ = false;
+    bool  trig_pending_         = false;
+    bool  relhold_pending_      = false;
+    bool  tap_released_pending_ = false;
     float held_ms_         = 0.f;
 };
 
@@ -134,6 +150,7 @@ class Controls
         f_[(int)Func::RECORD].SetLatching(false);
         f_[(int)Func::RETRIGGER].SetLatching(false);
         f_[(int)Func::UNDO].SetLatching(false);
+        f_[(int)Func::TILE].SetLatching(false); // tap = crop/append, no hold gesture
     }
 
     void Note(uint8_t note, bool on)

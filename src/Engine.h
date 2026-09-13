@@ -52,10 +52,42 @@ class Engine
         cycle_flag_   = false;
         win_start_sm_ = win_start_dz_ = 0.f;
         win_len_sm_ = win_len_dz_ = 1.f;
-        win_ratio_idx_       = -1;
-        win_ratio_committed_ = -1;
-        win_start_committed_ = -1;
+        win_ratio_idx_        = -1;
+        win_ratio_committed_  = -1;
+        win_start_committed_  = -1;
+        win_top_exp_committed_ = kMinWinExp;
         reader_.Init();
+
+        last_edit_       = LastEdit::NONE;
+        tile_pending_    = false;
+        tile_recapture_  = false;
+        tile_cap_flag_   = false;
+        tile_active_     = false;
+        tile_count_      = 0;
+        tile_unit_len_   = 0;
+        tile_prev_len_   = 0;
+        tile_prev_valid_ = false;
+        tile_undone_     = false;
+    }
+
+    // Scratch memory for Crop & Tile — a separate SDRAM allocation from the main
+    // loop buffer. `unit` holds the pristine cropped slice for the life of a
+    // tiling session; `build` is where each new tiled result is assembled before
+    // being copied into the live loop; `prev` holds the live loop's content from
+    // immediately before the most recent tile commit, for one-level undo/redo.
+    void InitTile(int16_t* unit,
+                  size_t    unit_cap,
+                  int16_t*  build,
+                  size_t    build_cap,
+                  int16_t*  prev,
+                  size_t    prev_cap)
+    {
+        tile_unit_     = unit;
+        tile_unit_cap_ = unit_cap;
+        tile_build_    = build;
+        tile_build_cap_ = build_cap;
+        tile_prev_     = prev;
+        tile_prev_cap_ = prev_cap;
     }
 
     // ---- performance controls --------------------------------------------
@@ -124,9 +156,26 @@ class Engine
             // fixed max — a 30 s loop at 120 BPM can reach x32/x64, not just x8.
             double period   = (double)clock_->Period();
             double nPeriods = (double)len_ / period;
-            int    topExp   = kMinWinExp;
-            while(topExp < kMaxWinExp && (double)(1 << (topExp + 1)) <= nPeriods)
-                topExp++;
+            // Hysteresis on the ladder's own ceiling (grow/shrink only past an
+            // 8% margin), not just on the selected step: without it, ordinary
+            // clock-period jitter sitting a loop length right at a power-of-two
+            // boundary -- exactly what Crop & Tile produces -- flaps the whole
+            // ladder size and forces the *selected* ratio to be clamped down
+            // and sprung back up, which reads as the window randomly switching
+            // between two sizes. (Also: ldexpf instead of `1 << x`, which was
+            // undefined behaviour for the negative exponents kMinWinExp starts
+            // at.)
+            if(win_top_exp_committed_ < kMinWinExp)
+                win_top_exp_committed_ = kMinWinExp;
+            while(win_top_exp_committed_ < kMaxWinExp
+                  && ldexpf(1.0f, win_top_exp_committed_ + 1)
+                         <= (float)(nPeriods * (1.0 - kTopExpHyst)))
+                win_top_exp_committed_++;
+            while(win_top_exp_committed_ > kMinWinExp
+                  && ldexpf(1.0f, win_top_exp_committed_)
+                         > (float)(nPeriods * (1.0 + kTopExpHyst)))
+                win_top_exp_committed_--;
+            int topExp   = win_top_exp_committed_;
             int numSteps = topExp - kMinWinExp + 1;
 
             int idx = QuantHyst(ln * (float)numSteps,
@@ -213,7 +262,8 @@ class Engine
         else if(!engaged && od_)
         {
             snap_->Commit();
-            od_ = false;
+            last_edit_ = LastEdit::SNAPSHOT;
+            od_        = false;
         }
     }
 
@@ -242,10 +292,43 @@ class Engine
         }
     }
 
+    // Undo dispatches to whichever mechanism produced the most recent commit:
+    // the Snapshot COW layer (Overdub/Substitute) or a Crop & Tile swap.
     void Undo()
     {
-        if(state_ == State::PLAYING && snap_->CanUndo())
+        if(state_ != State::PLAYING)
+            return;
+        if(last_edit_ == LastEdit::TILE)
+            UndoTile();
+        else if(snap_->CanUndo())
             snap_->UndoRedo(*loop_);
+    }
+
+    // Crop & Tile: cheap to call from the audio callback — just requests the
+    // work. The actual memory operation runs from the main loop (ProcessTileJob),
+    // never inside the audio ISR, so it can take its time without stalling audio.
+    //
+    // recapture=false (tap): append one more copy of the current unit (define
+    // one now if no session is active yet).
+    // recapture=true (hold): (re)capture the window (or whole loop) right now
+    // as a new unit, resetting the count to 1 -- lets you redefine the unit
+    // at any point, e.g. after hitting the capacity ceiling with a small one.
+    void Tile(bool recapture)
+    {
+        if(state_ == State::PLAYING)
+        {
+            tile_pending_   = true;
+            tile_recapture_ = recapture;
+        }
+    }
+
+    // Call once per main-loop iteration (never from the audio callback).
+    void ProcessTileJob()
+    {
+        if(!tile_pending_)
+            return;
+        tile_pending_ = false;
+        DoTileWork(tile_recapture_);
     }
 
     // Loop-output mute (input monitor unaffected). Quantised to the clock;
@@ -294,6 +377,7 @@ class Engine
                 armed_       = Armed::NONE;
                 mute_target_ = mute_want_ = false;
                 state_       = State::EMPTY;
+                ResetTileSession(); // a fresh recording invalidates any tile undo
                 break;
         }
     }
@@ -346,6 +430,7 @@ class Engine
                     reader_.SetWindow(0.0, (double)len_);
                     decay_pos_ = 0;
                     state_     = State::PLAYING;
+                    ResetTileSession();
                 }
                 return in;
             }
@@ -415,8 +500,14 @@ class Engine
     bool   Reversed() const { return reader_.Dir() < 0; }
     bool   Overdubbing() const { return od_; }
     bool   Substituting() const { return sub_; }
-    bool   CanUndo() const { return snap_->CanUndo(); }
-    bool   Undone() const { return snap_->IsUndone(); }
+    bool   CanUndo() const
+    {
+        return last_edit_ == LastEdit::TILE ? tile_prev_valid_ : snap_->CanUndo();
+    }
+    bool Undone() const
+    {
+        return last_edit_ == LastEdit::TILE ? tile_undone_ : snap_->IsUndone();
+    }
     bool   Muted() const { return mute_target_; }
     bool   IsArmed() const { return armed_ != Armed::NONE; }
     bool   ClockOn() const { return clock_ && clock_->Present(); }
@@ -427,6 +518,12 @@ class Engine
         return c;
     }
     float CyclePhase() const { return reader_.LocalPhase(); }
+    bool  TileAtCapacity() // one-shot: a tile tap was just rejected for space
+    {
+        bool c         = tile_cap_flag_;
+        tile_cap_flag_ = false;
+        return c;
+    }
 
   private:
     enum class Armed
@@ -436,15 +533,27 @@ class Engine
         REC_CLOSE,
     };
 
+    // Which mechanism produced the most recent destructive commit — decides
+    // what the shared Undo button reverts.
+    enum class LastEdit
+    {
+        NONE,
+        SNAPSHOT, // Overdub / Substitute, via the Snapshot COW layer
+        TILE,     // Crop & Tile, via the whole-buffer swap below
+    };
+
     static constexpr size_t kMinLen       = 480;
     static constexpr float  kFreezeThresh = 0.999f;
     static constexpr float  kMuteRamp     = 1.0f / 96.0f; // ~2 ms
     static constexpr float  kWinDeadband  = 0.004f;       // ADC-noise hysteresis
 
     // Clock-locked window length ladder: eighth through 8x the clock period.
-    static constexpr int kMinWinExp    = -3; // 1/8x floor, fixed
-    static constexpr int kMaxWinExp    = 8;  // 256x ceiling, fixed
-    static constexpr int kNumWinRatios = kMaxWinExp - kMinWinExp + 1; // label table size
+    static constexpr int   kMinWinExp    = -3; // 1/8x floor, fixed
+    static constexpr int   kMaxWinExp    = 8;  // 256x ceiling, fixed
+    static constexpr int   kNumWinRatios = kMaxWinExp - kMinWinExp + 1; // label table size
+    static constexpr float kTopExpHyst   = 0.08f; // ladder-ceiling jitter margin
+
+    static constexpr size_t kTileXfade = 240; // ~5 ms junction crossfade
 
     void CloseNow()
     {
@@ -461,6 +570,17 @@ class Engine
             decay_pos_ = 0;
             state_     = State::PLAYING;
         }
+        ResetTileSession(); // new recording; nothing to tile-undo across it
+    }
+
+    void ResetTileSession()
+    {
+        tile_active_     = false;
+        tile_count_      = 0;
+        tile_prev_valid_ = false;
+        tile_undone_     = false;
+        if(last_edit_ == LastEdit::TILE)
+            last_edit_ = LastEdit::NONE;
     }
 
     // Quantise `raw` to an integer in [0, maxIdx], holding `committed` steady
@@ -497,11 +617,163 @@ class Engine
         if(!engaged && sub_)
         {
             if(sub_commit_)
+            {
                 snap_->Commit();
+                last_edit_ = LastEdit::SNAPSHOT;
+            }
             else
                 snap_->RevertTake(*loop_);
             sub_ = false;
         }
+    }
+
+    static inline float EqPowF(float x)
+    {
+        return x <= 0.f ? 0.f : (x >= 1.f ? 1.f : sinf(1.57079633f * x));
+    }
+
+    // The actual Crop & Tile memory operation. Runs synchronously from the main
+    // loop (never the audio ISR) — even the largest job is well under a second,
+    // and the loop's output is muted for its duration (existing Mute mechanism,
+    // saved/restored around it) so any transient inconsistency in the buffer
+    // while it's being rewritten is inaudible; no per-block chunking needed.
+    void DoTileWork(bool recapture)
+    {
+        if(state_ != State::PLAYING || !tile_unit_ || !tile_build_ || !tile_prev_)
+            return;
+
+        bool   windowed = Windowed();
+        size_t srcStart = windowed ? (size_t)reader_.WinStart() : (size_t)0;
+        size_t srcLen   = windowed ? (size_t)reader_.WinLen() : len_;
+
+        if(!tile_active_ || recapture)
+        {
+            if(srcLen == 0 || srcLen > tile_unit_cap_)
+            {
+                tile_cap_flag_ = true; // slice doesn't fit the unit scratch
+                return;
+            }
+            for(size_t i = 0; i < srcLen; i++)
+                tile_unit_[i] = loop_->Raw(srcStart + i);
+            tile_unit_len_ = srcLen;
+            tile_count_    = 0;
+            tile_active_   = true;
+        }
+
+        size_t newCount = (size_t)tile_count_ + 1;
+        size_t newLen   = tile_unit_len_ * newCount;
+        if(newLen > tile_build_cap_)
+        {
+            tile_cap_flag_ = true; // at capacity; session stays as-is
+            return;
+        }
+
+        // Back up "before this commit" for one-level undo/redo.
+        if(len_ <= tile_prev_cap_)
+        {
+            for(size_t i = 0; i < len_; i++)
+                tile_prev_[i] = loop_->Raw(i);
+            tile_prev_len_   = len_;
+            tile_prev_valid_ = true;
+        }
+        else
+            tile_prev_valid_ = false;
+        tile_undone_ = false;
+
+        bool savedMuteTarget = mute_target_;
+        mute_target_         = true; // silence output for the transition
+
+        size_t buildLen;
+        if(tile_count_ > 0)
+        {
+            // `len_` is the true current length (it already reflects any
+            // shrinkage from earlier joins) -- NOT tile_unit_len_*tile_count_,
+            // which only holds before the first join.
+            size_t oldLen = len_;
+            for(size_t i = 0; i < oldLen; i++)
+                tile_build_[i] = loop_->Raw(i);
+
+            size_t xfade = kTileXfade;
+            if(xfade > oldLen)
+                xfade = oldLen;
+            if(xfade > tile_unit_len_)
+                xfade = tile_unit_len_;
+            // True overlap-add: the appended unit's first `xfade` samples
+            // blend into (replace) the existing tail; its remaining samples
+            // follow immediately after, in the SAME loop / same index formula
+            // -- writing the two halves via different offsets was the bug
+            // (it left an `xfade`-sized gap of stale scratch content at the
+            // join, heard as a glitch).
+            for(size_t i = 0; i < tile_unit_len_; i++)
+            {
+                size_t di = oldLen - xfade + i;
+                if(i < xfade)
+                {
+                    float t     = (float)i / (float)xfade; // 0..1 across the join
+                    float a     = LoopBuffer::S2F(tile_build_[di]);
+                    float b     = LoopBuffer::S2F(tile_unit_[i]);
+                    tile_build_[di]
+                        = LoopBuffer::F2S(a * EqPowF(1.f - t) + b * EqPowF(t));
+                }
+                else
+                    tile_build_[di] = tile_unit_[i];
+            }
+            buildLen = oldLen + tile_unit_len_ - xfade; // the join overlaps, so
+                                                        // the total is shorter
+                                                        // by one xfade per join
+        }
+        else
+        {
+            for(size_t i = 0; i < tile_unit_len_; i++)
+                tile_build_[i] = tile_unit_[i];
+            buildLen = tile_unit_len_;
+        }
+
+        for(size_t i = 0; i < buildLen; i++)
+            loop_->SetRaw(i, tile_build_[i]);
+        len_        = buildLen;
+        tile_count_ = (int)newCount;
+
+        reader_.Init();
+        reader_.SetSpeed(1.0f);
+        reader_.SetWindow(0.0, (double)len_);
+        decay_pos_ = 0;
+        snap_->Reset(); // block bookkeeping no longer matches the new content
+        od_ = sub_ = false;
+
+        last_edit_   = LastEdit::TILE;
+        mute_target_ = savedMuteTarget;
+    }
+
+    // Swap the live loop with the pre-commit backup (toggles undo <-> redo),
+    // using the build scratch as the temporary during the exchange.
+    void UndoTile()
+    {
+        if(!tile_prev_valid_ || !tile_build_)
+            return;
+
+        bool savedMuteTarget = mute_target_;
+        mute_target_         = true;
+
+        for(size_t i = 0; i < len_; i++)
+            tile_build_[i] = loop_->Raw(i);
+        size_t curLen = len_;
+
+        for(size_t i = 0; i < tile_prev_len_; i++)
+            loop_->SetRaw(i, tile_prev_[i]);
+        len_ = tile_prev_len_;
+
+        for(size_t i = 0; i < curLen; i++)
+            tile_prev_[i] = tile_build_[i];
+        tile_prev_len_ = curLen;
+        tile_undone_   = !tile_undone_;
+
+        reader_.Init();
+        reader_.SetSpeed(1.0f);
+        reader_.SetWindow(0.0, (double)len_);
+        decay_pos_ = 0;
+
+        mute_target_ = savedMuteTarget;
     }
 
     LoopBuffer* loop_  = nullptr;
@@ -529,11 +801,32 @@ class Engine
     float win_start_dz_   = 0.f;
     float win_len_dz_     = 1.f;
     int   win_ratio_idx_  = -1;
-    int   win_ratio_committed_ = -1;
-    int   win_start_committed_ = -1;
+    int   win_ratio_committed_   = -1;
+    int   win_start_committed_   = -1;
+    int   win_top_exp_committed_ = kMinWinExp;
     bool  sub_arm_        = false;
     bool  sub_arm_want_   = false;
     bool  sub_req_prev_   = false;
     bool  sub_commit_req_ = false;
     bool  cycle_flag_     = false;
+
+    LastEdit last_edit_ = LastEdit::NONE;
+
+    // Crop & Tile scratch (owned by the caller; see InitTile()).
+    int16_t* tile_unit_      = nullptr;
+    size_t   tile_unit_cap_  = 0;
+    int16_t* tile_build_     = nullptr;
+    size_t   tile_build_cap_ = 0;
+    int16_t* tile_prev_      = nullptr;
+    size_t   tile_prev_cap_  = 0;
+
+    bool   tile_pending_    = false;
+    bool   tile_recapture_  = false;
+    bool   tile_cap_flag_   = false;
+    bool   tile_active_     = false;
+    int    tile_count_      = 0;
+    size_t tile_unit_len_   = 0;
+    size_t tile_prev_len_   = 0;
+    bool   tile_prev_valid_ = false;
+    bool   tile_undone_     = false;
 };

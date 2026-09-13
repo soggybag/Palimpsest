@@ -41,24 +41,54 @@ CpuLoadMeter   cpu;
 
 constexpr size_t kBufSamples  = 48000u * 400u;      // 38.4 MB loop buffer
 constexpr size_t kPoolSamples = 8u * 1024u * 1024u; // 16 MB snapshot pool
+
+// Crop & Tile scratch (M5.2) — separate from the main loop buffer.
+constexpr size_t kTileUnitSamples  = 48000u * 10u; // ~1 MB: the cropped slice
+constexpr size_t kTileBuildSamples = 48000u * 30u; // ~2.9 MB: assembled result
+constexpr size_t kTilePrevSamples  = kTileBuildSamples; // ~2.9 MB: undo backup
+
 static int16_t DSY_SDRAM_BSS s_buf[kBufSamples];
 static int16_t DSY_SDRAM_BSS s_pool[kPoolSamples];
+static int16_t DSY_SDRAM_BSS s_tile_unit[kTileUnitSamples];
+static int16_t DSY_SDRAM_BSS s_tile_build[kTileBuildSamples];
+static int16_t DSY_SDRAM_BSS s_tile_prev[kTilePrevSamples];
 
 static float    s_dt_ms                      = 0.f;
 static bool     s_enc_pressed                = false;
 static uint8_t  s_col_sent[(int)Func::COUNT] = {0};
 static float    s_cpu_peak                   = 0.f; // peak load, last ~1 s window
 static uint32_t s_sync_left                  = 0;   // SYNC OUT pulse countdown
+static uint32_t s_tile_full_until            = 0;   // ms timestamp; show FULL until then
+
+// MIDI CC override for the four panel knobs that already have real firmware
+// meaning (Feedback/Speed/Size/Start) -- for a software control surface (e.g.
+// the web mockup in web-controller/). CC 20 Feedback, 21 Speed, 22 Size
+// (window length), 23 Start (window start), values 0..127 mapped straight
+// onto the 0..1 range the knob-reading functions already work in. Once a CC
+// arrives for a parameter it takes over from the physical knob for the rest
+// of the session -- simplest, most predictable behaviour for a bench tool;
+// there's no "let go to revert to the pot" gesture.
+static bool  s_cc_touch[4] = {false, false, false, false};
+static float s_cc_val[4]   = {0.f, 0.f, 0.f, 0.f};
+enum
+{
+    kCcFeedback = 20,
+    kCcSpeed    = 21,
+    kCcSize     = 22,
+    kCcStart    = 23,
+};
 
 static float FeedbackFromKnob()
 {
+    if(s_cc_touch[0])
+        return s_cc_val[0];
     float k = hw.GetKnobValue(DaisyPatch::CTRL_1);
     return fclamp((k - 0.03f) / 0.94f, 0.f, 1.f);
 }
 
 static float SpeedFromKnob()
 {
-    float k = hw.GetKnobValue(DaisyPatch::CTRL_2);
+    float k = s_cc_touch[1] ? s_cc_val[1] : hw.GetKnobValue(DaisyPatch::CTRL_2);
     float s = powf(2.f, (k - 0.5f) * 4.f);
     if(fabsf(s - 0.5f) < 0.03f)
         s = 0.5f;
@@ -67,6 +97,16 @@ static float SpeedFromKnob()
     else if(fabsf(s - 2.0f) < 0.06f)
         s = 2.0f;
     return s;
+}
+
+static float WindowStartNorm()
+{
+    return s_cc_touch[3] ? s_cc_val[3] : hw.GetKnobValue(DaisyPatch::CTRL_4);
+}
+
+static float WindowLenNorm()
+{
+    return s_cc_touch[2] ? s_cc_val[2] : hw.GetKnobValue(DaisyPatch::CTRL_3);
 }
 
 static void RouteMidiEvent(MidiEvent m)
@@ -79,6 +119,16 @@ static void RouteMidiEvent(MidiEvent m)
     else if(m.type == NoteOff)
     {
         controls.Note(m.AsNoteOff().note, false);
+    }
+    else if(m.type == ControlChange)
+    {
+        ControlChangeEvent c   = m.AsControlChange();
+        int                idx = c.control_number - kCcFeedback; // 20..23 -> 0..3
+        if(idx >= 0 && idx < 4)
+        {
+            s_cc_touch[idx] = true;
+            s_cc_val[idx]   = (float)c.value / 127.f;
+        }
     }
 }
 
@@ -97,7 +147,7 @@ static void PumpMidi()
 static void SendColours()
 {
     static const uint8_t base[(int)Func::COUNT]
-        = {1, 1, 1, 2, 2, 2, 3}; // REC OVR SUB red; MUTE REV RET cyan; UNDO green
+        = {1, 1, 1, 2, 2, 2, 3, 1}; // REC OVR SUB TILE red; MUTE REV RET cyan; UNDO green
     for(int i = 0; i < (int)Func::COUNT; i++)
     {
         uint8_t c = controls[(Func)i].Engaged() ? base[i] : 5;
@@ -154,9 +204,14 @@ static void AudioCallback(AudioHandle::InputBuffer  in,
     engine.Mute(controls[Func::MUTE].Engaged());
     if(controls[Func::UNDO].Trigger())
         engine.Undo();
+    // Tile: cheap to call from here -- just requests the job, the main loop
+    // does the actual work. Tap = append; hold = redefine the unit right now.
+    if(controls[Func::TILE].TapReleased())
+        engine.Tile(false);
+    if(controls[Func::TILE].ReleaseAfterHold())
+        engine.Tile(true);
 
-    engine.SetWindow(hw.GetKnobValue(DaisyPatch::CTRL_4),  // start
-                     hw.GetKnobValue(DaisyPatch::CTRL_3)); // length (max = off)
+    engine.SetWindow(WindowStartNorm(), WindowLenNorm()); // length: max = off
 
     // A fresh canvas must not inherit a stuck latch.
     static Engine::State s_prev_state = Engine::State::EMPTY;
@@ -207,7 +262,8 @@ static void DrawUI()
     hw.display.WriteString(b, Font_7x10, true);
 
     // write / undo status, top-right
-    const char* w = engine.Muted()         ? "MUTE"
+    const char* w = System::GetNow() < s_tile_full_until ? "FULL"
+                    : engine.Muted()        ? "MUTE"
                     : engine.IsArmed()       ? "ARM"
                     : engine.Substituting() ? "SUB"
                     : engine.Overdubbing() ? "ODB"
@@ -287,7 +343,8 @@ static void DrawUI()
     }
 
     // engaged-function row: letter shown when that Func is engaged (latch|gate)
-    static const char kL[(int)Func::COUNT] = {'R', 'O', 'S', 'M', 'V', 'T', 'U'};
+    static const char kL[(int)Func::COUNT]
+        = {'R', 'O', 'S', 'M', 'V', 'T', 'U', 'C'};
     char              fs[(int)Func::COUNT + 1];
     for(int i = 0; i < (int)Func::COUNT; i++)
         fs[i] = controls[(Func)i].Engaged() ? kL[i] : '.';
@@ -319,6 +376,12 @@ int main(void)
     snap.Init(s_pool, kPoolSamples, kBufSamples);
     clk.Init(sr);
     engine.Init(&loop, &snap, &clk, sr);
+    engine.InitTile(s_tile_unit,
+                    kTileUnitSamples,
+                    s_tile_build,
+                    kTileBuildSamples,
+                    s_tile_prev,
+                    kTilePrevSamples);
     controls.Init();
     cpu.Init(sr, hw.AudioBlockSize());
 
@@ -334,6 +397,9 @@ int main(void)
     uint32_t last = 0;
     while(1)
     {
+        engine.ProcessTileJob(); // Crop & Tile's memory work; never in the ISR
+        if(engine.TileAtCapacity())
+            s_tile_full_until = System::GetNow() + 800; // flash FULL briefly
         DrawUI();
         uint32_t now = System::GetNow();
         if(now - last >= 1000)

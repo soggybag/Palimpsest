@@ -30,6 +30,15 @@ class Snapshot
         if(n_slots_ > kMaxSlots)
             n_slots_ = kMaxSlots;
         buf_samps_  = buf_samps;
+        Reset();
+    }
+
+    // Clear all bookkeeping (pool/size stay as configured by Init). Call this
+    // whenever the live buffer's content is replaced out from under the block
+    // map by something other than Touch/Commit/Revert -- e.g. Crop & Tile -- so
+    // stale block->slot mappings can't be misapplied to unrelated new content.
+    void Reset()
+    {
         next_slot_  = 0;
         take_n_     = 0;
         undo_n_     = 0;

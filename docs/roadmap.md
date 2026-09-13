@@ -18,8 +18,8 @@ Build vertically: `record -> play -> feedback` solid and *musical* before any ed
 - [x] **M4** — Loop Window scanning
 - [x] **M5** — Clock: quantise, clocked Substitute, SYNC/PHASE out
 - [x] **M5.1** — clock-aware Loop Window (musical snapping)
-- [ ] **M5.2** — Crop & Tile   ← current
-- [ ] M6 — Loop Select
+- [x] **M5.2** — Crop & Tile
+- [ ] **M6** — Loop Select   ← current
 - [ ] M7 — Gesture recorder + probability + timeline polish
 
 ## Build & flash
@@ -209,17 +209,43 @@ ladder only shifts by the same <1% and stays musically stable.
 
 Redefine loop length by an explicit gesture (not real-time Multiply).
 
-- [ ] `loop_base_` offset in LoopBuffer/Engine — the loop lives at
-      `[base_, base_+len_)`; tiled loop built at a fresh offset (also the
-      groundwork for M6 slots)
-- [ ] `TILE` function: source = window slice if windowed, else whole loop
-- [ ] tap = crop loop to the slice (window resets off); repeat taps append
-      more copies (2x, 3x, ...); clock present + hold = one copy per pulse
-- [ ] ~5 ms equal-power junction crossfade baked at each tile boundary
-- [ ] copy done a few blocks per callback (no audio glitch)
-- [ ] one-level Undo: restore pre-tile buffer + length + window
-- [ ] spec update: length is immutable via *real-time* ops; Crop & Tile is the
-      deliberate exception
+Implementation landed differently than first sketched, after weighing the
+options: instead of a live-buffer base-offset (which would have forced
+LoopReader/Snapshot to carry an address translation on every access), Crop &
+Tile uses **dedicated SDRAM scratch** (`s_tile_unit` ~1 MB / 10 s cap,
+`s_tile_build` + `s_tile_prev` ~2.9 MB each / 30 s cap) and does the memory
+work **synchronously from the main loop, never the audio ISR** — the existing
+Mute mechanism silences output for the (sub-second) duration, so a torn read
+of the live buffer mid-copy is simply inaudible, with no per-block chunking
+needed. SDRAM is at 92% (~5 MB genuinely free) with this in.
+
+- [x] `TILE` function (note 67, impulse): source = window slice if windowed,
+      else the whole loop
+- [x] tap = crop to the slice (first tap of a session) / append one more copy
+      (subsequent taps); window resets to off after each commit
+- [x] ~5 ms equal-power junction crossfade baked at each tile boundary
+- [x] one-level Undo/Redo toggle (swap live buffer <-> pre-commit backup);
+      `Undo` now dispatches by *which* mechanism produced the last commit
+      (Snapshot for Overdub/Substitute, or the Tile swap) so the one shared
+      button still does the right thing
+- [x] a Tile commit resets the Snapshot COW bookkeeping (`Snapshot::Reset()`)
+      and a fresh Record resets the Tile session — neither can apply stale
+      undo state to content it doesn't describe
+- [x] over-capacity taps are silently ignored (session stays as-is, no crash)
+
+**Verify on hardware:**
+- [ ] window a slice, tap TILE → loop crops to just that slice, length
+      readout drops accordingly, window off
+- [ ] tap TILE again (and again) → length doubles / triples / ... each time,
+      click-free at the new joins
+- [ ] no window active, tap TILE on a plain recorded loop → doubles it
+      directly (no crop needed first)
+- [ ] `tap $UNDO` → reverts the last tile step; `tap $UNDO` again → redoes it
+- [ ] do an Overdub, confirm Undo reverts it; then Tile, confirm Undo now
+      reverts the *tile* step, not the overdub
+- [ ] tile past the ~30 s build cap → further taps do nothing audible/harmful
+- [ ] no click or dropout audible around a tile commit (the mute-during-copy
+      should be inaudible or at most a very brief silence)
 
 ## M6 — Loop Select
 
